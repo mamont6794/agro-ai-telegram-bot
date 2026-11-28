@@ -4,12 +4,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import os
 import threading
 import telebot
-from telebot import types as tg_types
 from google import genai
 from google.genai import types
 
+# Зчитуємо ключі зі змінних оточення сервера (або підставляємо локально)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "ВСТАВ_СЮДИ_ТОКЕН_ВІД_BOTFATHER")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "ВСТАВ_СЮДИ_КЛЮЧ_ВІД_GOOGLE_AI_STUDIO")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", 5281798463))
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 KNOWLEDGE_PATH = os.path.join(BASE_DIR, "knowledge.txt")
@@ -45,17 +46,6 @@ AVAILABLE_MODELS = [
     "gemini-3.8-flash",
 ]
 user_chats = {}
-
-
-def get_main_keyboard():
-    """Створює зручне мобільне меню кнопок під полем вводу."""
-    markup = tg_types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn_price = tg_types.KeyboardButton("🌾 Прайс і норми")
-    btn_calc = tg_types.KeyboardButton("🧮 Розрахунок на площу")
-    btn_delivery = tg_types.KeyboardButton("🚚 Доставка і знижки")
-    btn_reset = tg_types.KeyboardButton("🔄 Новий діалог")
-    markup.add(btn_price, btn_calc, btn_delivery, btn_reset)
-    return markup
 
 
 def get_user_chat(chat_id, model_name):
@@ -96,39 +86,14 @@ def save_lead_to_csv(user_id, lead_data):
 
 
 @bot.message_handler(commands=["start", "reset"])
-@bot.message_handler(func=lambda m: m.text == "🔄 Новий діалог")
 def send_welcome(message):
     user_chats.pop(message.chat.id, None)
     bot.reply_to(
         message,
         "Вітаю у «АгроПостач Плюс»! 🌾\n"
-        "Я ваш АІ-консультант. Оберіть потрібний розділ у меню нижче або напишіть, "
-        "яка культура та площа (в га) вас цікавить:",
-        reply_markup=get_main_keyboard(),
-    )
-
-
-@bot.message_handler(commands=["price"])
-@bot.message_handler(func=lambda m: m.text == "🌾 Прайс і норми")
-def handle_price(message):
-    message.text = "Надай короткий структурований список усіх товарів із прайсу з цінами та нормами витрат на гектар."
-    handle_message(message)
-
-
-@bot.message_handler(commands=["delivery"])
-@bot.message_handler(func=lambda m: m.text == "🚚 Доставка і знижки")
-def handle_delivery(message):
-    message.text = "Розкажи коротко про мінімальне замовлення, умови безкоштовної доставки, способи оплати та оптову знижку."
-    handle_message(message)
-
-
-@bot.message_handler(func=lambda m: m.text == "🧮 Розрахунок на площу")
-def handle_calc_prompt(message):
-    bot.reply_to(
-        message,
-        "Напишіть, яку культуру чи препарат плануєте вносити та скільки у вас гектарів (наприклад: *соняшник 120 га* або *селітра на 50 га*) — і я миттєво порахую обсяг та суму зі знижкою.",
-        parse_mode="Markdown",
-        reply_markup=get_main_keyboard(),
+        "Я ваш АІ-консультант. Допоможу підібрати насіння, добрива чи ЗЗР, "
+        "розрахувати норму та вартість на вашу площу, а також оформити замовлення.\n\n"
+        "Яка культура чи площа вас цікавить?",
     )
 
 
@@ -143,26 +108,36 @@ def handle_message(message):
             clean_reply = parts[0].strip()
             lead_info = parts[1].replace("]", "").strip()
 
+            # 1. Зберігаємо заявку у файл CSV
             save_lead_to_csv(message.chat.id, lead_info)
-            bot.reply_to(message, clean_reply, reply_markup=get_main_keyboard())
 
-            bot.send_message(
-                message.chat.id,
-                f"🔔 *[Сповіщення для власника бізнесу / CRM]*\n"
-                f"Нова заявка зафіксована:\n`{lead_info}`",
-                parse_mode="Markdown",
-            )
+            # 2. Відповідаємо клієнту (без службових даних)
+            bot.reply_to(message, clean_reply)
+
+            # 3. Надсилаємо миттєве сповіщення власнику бізнесу
+            username = f"@{message.from_user.username}" if message.from_user.username else "не вказано"
+            try:
+                bot.send_message(
+                    ADMIN_ID,
+                    f"🔥 *Нова заявка з Telegram-бота!*\n\n"
+                    f"📋 *Деталі:* `{lead_info}`\n"
+                    f"👤 *Telegram клієнта:* {username} (ID: `{message.chat.id}`)\n"
+                    f"🕒 *Час:* {datetime.now().strftime('%d.%m.%Y %H:%M')}",
+                    parse_mode="Markdown",
+                )
+            except Exception as admin_err:
+                print(f"[Помилка відправки адміну]: {admin_err}")
         else:
-            bot.reply_to(message, reply_text, reply_markup=get_main_keyboard())
+            bot.reply_to(message, reply_text)
 
     except Exception:
         bot.reply_to(
             message,
             "Зараз спостерігається високе навантаження на лінію. Напишіть, будь ласка, ще раз через 10 секунд!",
-            reply_markup=get_main_keyboard(),
         )
 
 
+# Мінівебсервер для підтримки роботи на безкоштовному хостингу Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
